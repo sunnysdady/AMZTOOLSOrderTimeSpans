@@ -1,0 +1,5 @@
+streamlit>=1.30.0
+pandas>=2.1.0
+plotly>=5.17.0
+openpyxl>=3.1.0  # 支持Excel文件上传
+python-dotenv>=1.0.0
