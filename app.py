@@ -112,6 +112,7 @@ def get_sku_multi_period(df, today_date, yesterday_date, last_week_today_date):
     last_14_days = df[(df['订单日期'] >= today_date - timedelta(days=13)) & (df['订单日期'] <= today_date)]
     last_30_days = df[(df['订单日期'] >= today_date - timedelta(days=29)) & (df['订单日期'] <= today_date)]
 
+    # 修复：将数字开头的列名改为纯中文（七天销量 而非 7天销量）
     sku_today = today_data.groupby('SKU').agg(
         今日销量=('数量', 'sum'),
         今日订单量=('订单号', 'nunique'),
@@ -128,13 +129,13 @@ def get_sku_multi_period(df, today_date, yesterday_date, last_week_today_date):
         上周今日销售额=('销售总额', 'sum')
     ).reset_index()
     sku_7d = last_7_days.groupby('SKU').agg(
-        7天销量=('数量', 'sum')
+        七天销量=('数量', 'sum')  # 修复：7天销量 → 七天销量
     ).reset_index()
     sku_14d = last_14_days.groupby('SKU').agg(
-        14天销量=('数量', 'sum')
+        十四天销量=('数量', 'sum')  # 修复：14天销量 → 十四天销量
     ).reset_index()
     sku_30d = last_30_days.groupby('SKU').agg(
-        30天销量=('数量', 'sum')
+        三十天销量=('数量', 'sum')  # 修复：30天销量 → 三十天销量
     ).reset_index()
 
     sku_multi = sku_today.merge(sku_yesterday, on='SKU', how='outer')
@@ -330,7 +331,8 @@ if uploaded_file is not None:
             sku_multi = get_sku_multi_period(processed_df, analysis_date, yesterday_date, last_week_today_date)
             if 'SKU' in processed_df.columns:
                 sku_multi = sku_multi.merge(processed_df[['SKU', 'ASIN', '产品名称']].drop_duplicates(), on='SKU', how='left')
-                display_cols = ['SKU', 'ASIN', '产品名称', '7天销量', '14天销量', '30天销量', '今日销量', '今日订单量', '今日销售额', '昨日销量', '昨日订单量', '昨日销售额', '上周今日销量', '上周今日订单量', '上周今日销售额']
+                # 修复：同步调整显示列名（7天→七天、14天→十四天、30天→三十天）
+                display_cols = ['SKU', 'ASIN', '产品名称', '七天销量', '十四天销量', '三十天销量', '今日销量', '今日订单量', '今日销售额', '昨日销量', '昨日订单量', '昨日销售额', '上周今日销量', '上周今日订单量', '上周今日销售额']
                 st.dataframe(sku_multi[display_cols], use_container_width=True, height=400)
             else:
                 st.warning("数据中缺少SKU字段，无法生成SKU多周期对比表")
