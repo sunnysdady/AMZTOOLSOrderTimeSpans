@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta  # 处理月份计算
 
 # --------------------------
 # 页面基础配置
@@ -12,6 +13,11 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"  # 宽屏布局，适配看板展示
 )
+
+# --------------------------
+# 全局常量定义（新增：解决week_order未定义问题）
+# --------------------------
+WEEK_ORDER = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']  # 全局星期排序
 
 # --------------------------
 # 辅助函数：数据处理
@@ -49,20 +55,39 @@ def get_hourly_stats(df):
 def get_weekly_stats(df):
     """按星期统计订单数"""
     weekly_stats = df.groupby('星期').size().reset_index(name='订单数')
-    # 强制按周一到周日排序
-    week_order = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-    weekly_stats['星期'] = pd.Categorical(weekly_stats['星期'], categories=week_order, ordered=True)
+    # 强制按周一到周日排序（使用全局常量）
+    weekly_stats['星期'] = pd.Categorical(weekly_stats['星期'], categories=WEEK_ORDER, ordered=True)
     weekly_stats = weekly_stats.sort_values('星期').reset_index(drop=True)
     return weekly_stats
 
 def get_week_hour_cross_stats(df):
     """星期×小时交叉统计（核心看板）"""
     cross_stats = df.groupby(['星期', '小时']).size().reset_index(name='订单数')
-    # 补全所有星期×小时组合
-    week_order = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-    all_week_hour = pd.MultiIndex.from_product([week_order, range(24)], names=['星期', '小时']).to_frame(index=False)
+    # 补全所有星期×小时组合（使用全局常量）
+    all_week_hour = pd.MultiIndex.from_product([WEEK_ORDER, range(24)], names=['星期', '小时']).to_frame(index=False)
     cross_stats = pd.merge(all_week_hour, cross_stats, on=['星期', '小时'], how='left').fillna(0)
     return cross_stats
+
+def calculate_time_range(data_max_date, range_type):
+    """
+    根据选择的时间范围类型，计算起始日期
+    :param data_max_date: 订单数据中的最大日期（最新订单日期）
+    :param range_type: 时间范围类型（近7天/14天/30天/上个月/自定义）
+    :return: 起始日期（datetime对象）
+    """
+    if range_type == "近7天":
+        start_date = data_max_date - timedelta(days=7)
+    elif range_type == "近14天":
+        start_date = data_max_date - timedelta(days=14)
+    elif range_type == "近30天":
+        start_date = data_max_date - timedelta(days=30)
+    elif range_type == "上个月":
+        # 上个月第一天 到 上个月最后一天
+        last_month = data_max_date - relativedelta(months=1)
+        start_date = datetime(last_month.year, last_month.month, 1)
+    else:  # 自定义，后续由用户选择的日期决定
+        start_date = None
+    return start_date
 
 # --------------------------
 # 页面UI & 核心逻辑
@@ -100,101 +125,183 @@ if uploaded_file is not None:
         # 处理数据
         with st.spinner("正在处理数据..."):
             processed_df = process_order_data(df, time_column)
-            hourly_stats = get_hourly_stats(processed_df)
-            weekly_stats = get_weekly_stats(processed_df)
-            cross_stats = get_week_hour_cross_stats(processed_df)
         
         st.success("数据处理完成！")
         st.divider()
         
-        # 2. 数据看板区域
-        st.subheader("2. 数据看板")
+        # 2. 时间范围筛选区域
+        st.subheader("2. 时间范围筛选")
         
-        # 分栏展示：左侧星期维度，右侧小时维度
-        col1, col2 = st.columns(2)
+        # 获取订单数据的时间边界
+        data_min_date = processed_df[time_column].dt.date.min()
+        data_max_date = processed_df[time_column].dt.date.max()
+        data_max_datetime = processed_df[time_column].max()  # 带时分秒的最新时间
         
-        # 2.1 星期维度统计
+        # 显示数据时间范围提示
+        st.info(f"当前订单数据时间范围：{data_min_date} ~ {data_max_date}")
+        
+        # 快捷时间范围按钮（一行排列）
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            st.markdown("#### 按星期统计")
-            # 可视化：柱状图
-            fig_week = px.bar(
-                weekly_stats,
-                x='星期',
-                y='订单数',
-                title='各星期订单数量',
-                color='订单数',
-                color_continuous_scale='Blues',
-                height=400
-            )
-            fig_week.update_layout(showlegend=False)
-            st.plotly_chart(fig_week, use_container_width=True)
-            # 数据表格
-            with st.expander("查看星期统计数据"):
-                st.dataframe(weekly_stats, use_container_width=True)
-        
-        # 2.2 小时维度统计
+            btn_7d = st.button("近7天", use_container_width=True)
         with col2:
-            st.markdown("#### 按24小时统计")
-            # 可视化：折线图（更适合小时趋势）
-            fig_hour = px.line(
-                hourly_stats,
-                x='小时',
-                y='订单数',
-                title='24小时订单数量趋势',
-                markers=True,
-                height=400
-            )
-            fig_hour.update_xaxes(tick0=0, dtick=1)  # 小时轴显示0-23
-            st.plotly_chart(fig_hour, use_container_width=True)
-            # 数据表格
-            with st.expander("查看小时统计数据"):
-                st.dataframe(hourly_stats, use_container_width=True)
+            btn_14d = st.button("近14天", use_container_width=True)
+        with col3:
+            btn_30d = st.button("近30天", use_container_width=True)
+        with col4:
+            btn_last_month = st.button("上个月", use_container_width=True)
+        with col5:
+            btn_all = st.button("全部数据", use_container_width=True)
         
-        # 2.3 星期×小时交叉热力图（核心看板）
-        st.markdown("#### 星期×24小时交叉分析（热力图）")
-        # 转换为透视表适配热力图
-        pivot_table = cross_stats.pivot(index='星期', columns='小时', values='订单数')
-        # 按周一到周日排序
-        pivot_table = pivot_table.reindex(week_order)
-        
-        fig_heatmap = go.Figure(data=go.Heatmap(
-            z=pivot_table.values,
-            x=pivot_table.columns,
-            y=pivot_table.index,
-            colorscale='YlGnBu',
-            hoverongaps=False,
-            hovertemplate='星期：%{y}<br>小时：%{x}<br>订单数：%{z}<extra></extra>'
-        ))
-        fig_heatmap.update_layout(
-            title='各时段订单分布热力图',
-            xaxis_title='小时',
-            yaxis_title='星期',
-            height=500
-        )
-        st.plotly_chart(fig_heatmap, use_container_width=True)
-        
-        # 3. 数据下载区域
-        st.divider()
-        st.subheader("3. 数据下载")
-        col_download1, col_download2 = st.columns(2)
-        with col_download1:
-            # 导出小时统计数据
-            csv_hour = hourly_stats.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button(
-                label="下载24小时统计数据",
-                data=csv_hour,
-                file_name=f"订单小时统计_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
+        # 自定义日期选择器
+        st.markdown("##### 或自定义时间范围")
+        col_start, col_end = st.columns(2)
+        with col_start:
+            custom_start_date = st.date_input(
+                "开始日期",
+                value=data_min_date,
+                min_value=data_min_date,
+                max_value=data_max_date
             )
-        with col_download2:
-            # 导出星期统计数据
-            csv_week = weekly_stats.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button(
-                label="下载星期统计数据",
-                data=csv_week,
-                file_name=f"订单星期统计_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
+        with col_end:
+            custom_end_date = st.date_input(
+                "结束日期",
+                value=data_max_date,
+                min_value=data_min_date,
+                max_value=data_max_date
             )
+        
+        # 确定最终筛选的时间范围
+        filter_start_date = None
+        filter_end_date = data_max_date  # 默认结束日期为最新
+        
+        if btn_7d:
+            filter_start_date = (data_max_datetime - timedelta(days=7)).date()
+        elif btn_14d:
+            filter_start_date = (data_max_datetime - timedelta(days=14)).date()
+        elif btn_30d:
+            filter_start_date = (data_max_datetime - timedelta(days=30)).date()
+        elif btn_last_month:
+            # 上个月的时间范围：上个月1号 到 上个月最后一天
+            last_month = data_max_datetime - relativedelta(months=1)
+            filter_start_date = datetime(last_month.year, last_month.month, 1).date()
+            # 计算上个月最后一天
+            first_day_current_month = datetime(data_max_datetime.year, data_max_datetime.month, 1)
+            filter_end_date = (first_day_current_month - timedelta(days=1)).date()
+        elif btn_all:
+            filter_start_date = data_min_date
+        else:
+            # 自定义日期
+            filter_start_date = custom_start_date
+            filter_end_date = custom_end_date
+        
+        # 过滤数据（转换为date比较，避免时分秒干扰）
+        processed_df['订单日期'] = processed_df[time_column].dt.date
+        filtered_df = processed_df[
+            (processed_df['订单日期'] >= filter_start_date) & 
+            (processed_df['订单日期'] <= filter_end_date)
+        ]
+        
+        # 验证过滤后的数据是否为空
+        if len(filtered_df) == 0:
+            st.warning(f"所选时间范围（{filter_start_date} ~ {filter_end_date}）内无订单数据！")
+        else:
+            st.success(f"筛选出 {filter_start_date} ~ {filter_end_date} 的订单数据，共 {len(filtered_df)} 条")
+            
+            # 重新统计筛选后的数据
+            hourly_stats = get_hourly_stats(filtered_df)
+            weekly_stats = get_weekly_stats(filtered_df)
+            cross_stats = get_week_hour_cross_stats(filtered_df)
+            
+            # 3. 数据看板区域
+            st.divider()
+            st.subheader("3. 数据看板")
+            
+            # 分栏展示：左侧星期维度，右侧小时维度
+            col_week, col_hour = st.columns(2)
+            
+            # 3.1 星期维度统计
+            with col_week:
+                st.markdown("#### 按星期统计")
+                # 可视化：柱状图
+                fig_week = px.bar(
+                    weekly_stats,
+                    x='星期',
+                    y='订单数',
+                    title=f'各星期订单数量（{filter_start_date} ~ {filter_end_date}）',
+                    color='订单数',
+                    color_continuous_scale='Blues',
+                    height=400
+                )
+                fig_week.update_layout(showlegend=False)
+                st.plotly_chart(fig_week, use_container_width=True)
+                # 数据表格
+                with st.expander("查看星期统计数据"):
+                    st.dataframe(weekly_stats, use_container_width=True)
+            
+            # 3.2 小时维度统计
+            with col_hour:
+                st.markdown("#### 按24小时统计")
+                # 可视化：折线图（更适合小时趋势）
+                fig_hour = px.line(
+                    hourly_stats,
+                    x='小时',
+                    y='订单数',
+                    title=f'24小时订单数量趋势（{filter_start_date} ~ {filter_end_date}）',
+                    markers=True,
+                    height=400
+                )
+                fig_hour.update_xaxes(tick0=0, dtick=1)  # 小时轴显示0-23
+                st.plotly_chart(fig_hour, use_container_width=True)
+                # 数据表格
+                with st.expander("查看小时统计数据"):
+                    st.dataframe(hourly_stats, use_container_width=True)
+            
+            # 3.3 星期×24小时交叉分析（热力图）- 修复week_order未定义问题
+            st.markdown("#### 星期×24小时交叉分析（热力图）")
+            # 转换为透视表适配热力图（使用全局常量WEEK_ORDER）
+            pivot_table = cross_stats.pivot(index='星期', columns='小时', values='订单数')
+            # 按周一到周日排序（使用全局常量）
+            pivot_table = pivot_table.reindex(WEEK_ORDER)
+            
+            fig_heatmap = go.Figure(data=go.Heatmap(
+                z=pivot_table.values,
+                x=pivot_table.columns,
+                y=pivot_table.index,
+                colorscale='YlGnBu',
+                hoverongaps=False,
+                hovertemplate='星期：%{y}<br>小时：%{x}<br>订单数：%{z}<extra></extra>'
+            ))
+            fig_heatmap.update_layout(
+                title=f'各时段订单分布热力图（{filter_start_date} ~ {filter_end_date}）',
+                xaxis_title='小时',
+                yaxis_title='星期',
+                height=500
+            )
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+            
+            # 4. 数据下载区域
+            st.divider()
+            st.subheader("4. 数据下载")
+            col_download1, col_download2 = st.columns(2)
+            with col_download1:
+                # 导出小时统计数据
+                csv_hour = hourly_stats.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="下载24小时统计数据",
+                    data=csv_hour,
+                    file_name=f"订单小时统计_{filter_start_date}_{filter_end_date}.csv",
+                    mime="text/csv"
+                )
+            with col_download2:
+                # 导出星期统计数据
+                csv_week = weekly_stats.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="下载星期统计数据",
+                    data=csv_week,
+                    file_name=f"订单星期统计_{filter_start_date}_{filter_end_date}.csv",
+                    mime="text/csv"
+                )
     
     except Exception as e:
         st.error(f"数据处理失败：{str(e)}")
